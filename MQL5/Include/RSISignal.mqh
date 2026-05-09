@@ -4,7 +4,6 @@
 //|  Pure header — no OnInit/OnCalculate/global state               |
 //+------------------------------------------------------------------+
 #property copyright "rsi-bot"
-#property strict
 
 //+------------------------------------------------------------------+
 //| Result struct                                                    |
