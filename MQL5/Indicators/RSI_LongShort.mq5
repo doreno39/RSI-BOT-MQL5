@@ -147,6 +147,16 @@ int OnInit()
    SetIndexBuffer(5, RSIHighBuffer, INDICATOR_DATA);
    SetIndexBuffer(6, RSILowBuffer,  INDICATOR_DATA);
 
+   //--- Đánh dấu AS_SERIES cho buffers (index 0 = bar hiện tại)
+   //    Phải khớp với rsiRaw/ema9Arr/wma45Arr dùng trong OnCalculate
+   ArraySetAsSeries(RSIMidBuffer,  true);
+   ArraySetAsSeries(EMA9Buffer,    true);
+   ArraySetAsSeries(WMA45Buffer,   true);
+   ArraySetAsSeries(BuyBuffer,     true);
+   ArraySetAsSeries(SellBuffer,    true);
+   ArraySetAsSeries(RSIHighBuffer, true);
+   ArraySetAsSeries(RSILowBuffer,  true);
+
    //--- Giá trị rỗng mặc định
    PlotIndexSetDouble(0, PLOT_EMPTY_VALUE, EMPTY_VALUE);
    PlotIndexSetDouble(1, PLOT_EMPTY_VALUE, EMPTY_VALUE);

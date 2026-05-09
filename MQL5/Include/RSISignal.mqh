@@ -231,10 +231,10 @@ RSISignalResult CalcRSISignal(
    // Dùng lại lookback và trendArrLen đã tính ở trên
    int trendArrLen = trendArrLen_pre;
 
-   bool downExpandArr[];
-   bool upExpandArr[];
-   ArrayResize(downExpandArr, trendArrLen);
-   ArrayResize(upExpandArr,   trendArrLen);
+   bool localDownExp[];
+   bool localUpExp[];
+   ArrayResize(localDownExp, trendArrLen);
+   ArrayResize(localUpExp,   trendArrLen);
 
    for(int i = 0; i < trendArrLen; i++)
      {
@@ -248,7 +248,7 @@ RSISignalResult CalcRSISignal(
       double hDp = HighestN(diffDown, i + 1, expansionLen);
       bool ed_i  = (hDc != EMPTY_VALUE && hDp != EMPTY_VALUE && hDc > hDp);
 
-      downExpandArr[i] = dt_i && fr_i && fe_i && fw_i && ed_i;
+      localDownExp[i] = dt_i && fr_i && fe_i && fw_i && ed_i;
 
       // Tính uptrend expanding tại i
       bool ut_i   = (rsiArr[i] > ema9Arr[i] && ema9Arr[i] > wma45Arr[i]);
@@ -260,7 +260,7 @@ RSISignalResult CalcRSISignal(
       double hUp = HighestN(diffUp, i + 1, expansionLen);
       bool eu_i  = (hUc != EMPTY_VALUE && hUp != EMPTY_VALUE && hUc > hUp);
 
-      upExpandArr[i] = ut_i && rr_i && re_i && rw_i && eu_i;
+      localUpExp[i] = ut_i && rr_i && re_i && rw_i && eu_i;
      }
 
    // ---- Buy Signal ----
@@ -274,7 +274,7 @@ RSISignalResult CalcRSISignal(
    bool prevDowntrend = (rsiArr[idx+1]  < ema9Arr[idx+1] &&
                          ema9Arr[idx+1] < wma45Arr[idx+1]);
    // Cond 4: Previously had downtrend expanding
-   bool hadDownExpand = FindPrevTrend(downExpandArr, idx, lookback);
+   bool hadDownExpand = FindPrevTrend(localDownExp, idx, lookback);
    // Cond 5: EMA9 slope >= 0
    bool ema9Up = (ema9Arr[idx] >= ema9Arr[idx+1]);
    // Cond 6: Distance OK
@@ -291,7 +291,7 @@ RSISignalResult CalcRSISignal(
    bool prevUptrend = (rsiArr[idx+1]  > ema9Arr[idx+1] &&
                        ema9Arr[idx+1] > wma45Arr[idx+1]);
    // Cond 4: Previously had uptrend expanding
-   bool hadUpExpand = FindPrevTrend(upExpandArr, idx, lookback);
+   bool hadUpExpand = FindPrevTrend(localUpExp, idx, lookback);
    // Cond 5: EMA9 slope <= 0
    bool ema9Down = (ema9Arr[idx] <= ema9Arr[idx+1]);
    // Cond 2 & 6 reuse same curlingIn and distOK
@@ -311,14 +311,14 @@ void CalcExpandArrays(
    const double &rsiArr[],
    const double &ema9Arr[],
    const double &wma45Arr[],
-   bool         &downExpandArr[],   // output
-   bool         &upExpandArr[],     // output
+   bool         &outDown[],   // output: downtrend expanding
+   bool         &outUp[],     // output: uptrend expanding
    int    totalBars,
    int    fallingLen,
    int    expansionLen)
   {
-   ArrayResize(downExpandArr, totalBars);
-   ArrayResize(upExpandArr,   totalBars);
+   ArrayResize(outDown, totalBars);
+   ArrayResize(outUp,   totalBars);
 
    // Pre-compute diff arrays (O(N))
    double diffDown[];
@@ -334,8 +334,8 @@ void CalcExpandArrays(
    // Compute expand arrays (O(N × expansionLen))
    for(int i = 0; i < totalBars; i++)
      {
-      downExpandArr[i] = false;
-      upExpandArr[i]   = false;
+      outDown[i] = false;
+      outUp[i]   = false;
 
       bool dt = rsiArr[i] < ema9Arr[i] && ema9Arr[i] < wma45Arr[i];
       bool ut = rsiArr[i] > ema9Arr[i] && ema9Arr[i] > wma45Arr[i];
@@ -348,7 +348,7 @@ void CalcExpandArrays(
          double hDc = HighestN(diffDown, i,     expansionLen);
          double hDp = HighestN(diffDown, i + 1, expansionLen);
          bool ed = hDc != EMPTY_VALUE && hDp != EMPTY_VALUE && hDc > hDp;
-         downExpandArr[i] = fr && fe && fw && ed;
+         outDown[i] = fr && fe && fw && ed;
         }
 
       if(ut)
@@ -359,7 +359,7 @@ void CalcExpandArrays(
          double hUc = HighestN(diffUp, i,     expansionLen);
          double hUp = HighestN(diffUp, i + 1, expansionLen);
          bool eu = hUc != EMPTY_VALUE && hUp != EMPTY_VALUE && hUc > hUp;
-         upExpandArr[i] = rr && re && rw && eu;
+         outUp[i] = rr && re && rw && eu;
         }
      }
   }
@@ -373,8 +373,8 @@ RSISignalResult CalcRSISignalFast(
    const double &rsiArr[],
    const double &ema9Arr[],
    const double &wma45Arr[],
-   const bool   &downExpandArr[],
-   const bool   &upExpandArr[],
+   const bool   &inDown[],
+   const bool   &inUp[],
    int    idx,
    double distThreshold,
    int    prevTrendLookback = 50)
@@ -394,7 +394,7 @@ RSISignalResult CalcRSISignalFast(
    bool crossUp   = rsiArr[idx] > ema9Arr[idx]   && rsiArr[idx+1] <= ema9Arr[idx+1];
    bool curlingIn = MathAbs(wma45Arr[idx] - ema9Arr[idx]) < MathAbs(wma45Arr[idx+1] - ema9Arr[idx+1]);
    bool prevDown  = rsiArr[idx+1] < ema9Arr[idx+1] && ema9Arr[idx+1] < wma45Arr[idx+1];
-   bool hadDownExp = FindPrevTrend(downExpandArr, idx, prevTrendLookback);
+   bool hadDownExp = FindPrevTrend(inDown, idx, prevTrendLookback);
    bool ema9Up    = ema9Arr[idx] >= ema9Arr[idx+1];
    bool distOK    = MathAbs(wma45Arr[idx] - ema9Arr[idx]) <= distThreshold;
    result.isBuy = crossUp && curlingIn && prevDown && hadDownExp && ema9Up && distOK;
@@ -402,7 +402,7 @@ RSISignalResult CalcRSISignalFast(
    // Sell Signal
    bool crossDown  = rsiArr[idx] < ema9Arr[idx]   && rsiArr[idx+1] >= ema9Arr[idx+1];
    bool prevUp     = rsiArr[idx+1] > ema9Arr[idx+1] && ema9Arr[idx+1] > wma45Arr[idx+1];
-   bool hadUpExp   = FindPrevTrend(upExpandArr, idx, prevTrendLookback);
+   bool hadUpExp   = FindPrevTrend(inUp, idx, prevTrendLookback);
    bool ema9Down   = ema9Arr[idx] <= ema9Arr[idx+1];
    result.isSell = crossDown && curlingIn && prevUp && hadUpExp && ema9Down && distOK;
 
