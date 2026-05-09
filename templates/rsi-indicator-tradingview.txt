@@ -1,0 +1,74 @@
+//@version=6
+indicator("Long Short Lien Tuc", overlay=false, scale=scale.right)
+
+// Fixed parameters
+rsi_length = 14
+ema_length = 9
+wma_length = 45
+falling_length = 3
+expansion_length = 5
+distance_threshold = 10.0
+
+// Calculate RSI14, EMA9, and WMA45 using real-time close price
+rsi14 = ta.rsi(close, rsi_length)  // RSI sẽ tự động cập nhật với close[0] trong thời gian thực
+ema9_rsi14 = ta.ema(rsi14, ema_length)
+wma45_rsi14 = ta.wma(rsi14, wma_length)
+
+// Plot RSI14, EMA9, and WMA45
+rsi_color = rsi14 >= 80 ? color.red : (rsi14 <= 20 ? color.lime : color.purple)
+plot(rsi14, color=rsi_color, linewidth=2, title="RSI14")
+plot(ema9_rsi14, color=color.orange, linewidth=2, title="EMA9")
+plot(wma45_rsi14, color=color.green, linewidth=2, title="WMA45")
+
+// Plot overbought, oversold, and midline
+hline(80, "Overbought", color=color.white, linestyle=hline.style_dotted)
+hline(50, "Midline", color=color.gray, linestyle=hline.style_dashed)
+hline(20, "Oversold", color=color.white, linestyle=hline.style_dotted)
+
+// Detect downtrend and expansion (for buy signal)
+downtrend = rsi14 < ema9_rsi14 and ema9_rsi14 < wma45_rsi14
+falling_rsi = ta.falling(rsi14, falling_length)
+falling_ema9 = ta.falling(ema9_rsi14, falling_length)
+falling_wma45 = ta.falling(wma45_rsi14, falling_length)
+expansion_down = ta.highest(wma45_rsi14 - rsi14, expansion_length) > ta.highest(wma45_rsi14 - rsi14, expansion_length)[1]
+is_downtrend_expanding = downtrend and falling_rsi and falling_ema9 and falling_wma45 and expansion_down
+
+// Detect uptrend and expansion (for sell signal)
+uptrend = rsi14 > ema9_rsi14 and ema9_rsi14 > wma45_rsi14
+rising_rsi = ta.rising(rsi14, falling_length)
+rising_ema9 = ta.rising(ema9_rsi14, falling_length)
+rising_wma45 = ta.rising(wma45_rsi14, falling_length)
+expansion_up = ta.highest(rsi14 - wma45_rsi14, expansion_length) > ta.highest(rsi14 - wma45_rsi14, expansion_length)[1]
+is_uptrend_expanding = uptrend and rising_rsi and rising_ema9 and rising_wma45 and expansion_up
+
+// Store the previous trend states
+prev_downtrend = ta.valuewhen(is_downtrend_expanding, true, 1)
+prev_uptrend = ta.valuewhen(is_uptrend_expanding, true, 1)
+
+// Calculate EMA9 slope and distance to WMA45
+ema9_slope = ema9_rsi14 - ema9_rsi14[1]
+ema9_wma45_distance = math.abs(wma45_rsi14 - ema9_rsi14)
+
+// Conditions for EMA9 slope and distance
+ema9_slope_ok_for_buy = ema9_slope >= 0
+ema9_slope_ok_for_sell = ema9_slope <= 0
+distance_ok = ema9_wma45_distance <= distance_threshold
+
+// Detect buy signal in real-time
+rsi_cross_above_ema9 = rsi14 > ema9_rsi14 and rsi14[1] <= ema9_rsi14[1]  // Thay ta.crossover để dùng dữ liệu real-time
+ema9_curling_in_for_buy = ema9_wma45_distance < ema9_wma45_distance[1]
+was_downtrend_before = rsi14[1] < ema9_rsi14[1] and ema9_rsi14[1] < wma45_rsi14[1]
+buy_signal = rsi_cross_above_ema9 and ema9_curling_in_for_buy and prev_downtrend and was_downtrend_before and ema9_slope_ok_for_buy and distance_ok
+
+// Detect sell signal in real-time
+rsi_cross_below_ema9 = rsi14 < ema9_rsi14 and rsi14[1] >= ema9_rsi14[1]  // Thay ta.crossunder để dùng dữ liệu real-time
+ema9_curling_in_for_sell = ema9_wma45_distance < ema9_wma45_distance[1]
+was_uptrend_before = rsi14[1] > ema9_rsi14[1] and ema9_rsi14[1] > wma45_rsi14[1]
+sell_signal = rsi_cross_below_ema9 and ema9_curling_in_for_sell and prev_uptrend and was_uptrend_before and ema9_slope_ok_for_sell and distance_ok
+
+// Plot buy and sell signals in real-time
+plotshape(buy_signal ? rsi14 - 8 : na, title="Buy Signal", location=location.absolute, color=color.lime, style=shape.triangleup, size=size.tiny)
+plotshape(sell_signal ? rsi14 + 8 : na, title="Sell Signal", location=location.absolute, color=color.red, style=shape.triangledown, size=size.tiny)
+
+alertcondition(buy_signal, title="Buy Signal Triggered", message="RSI buy conditions met")
+alertcondition(sell_signal, title="Sell Signal Triggered", message="RSI sell conditions met")
