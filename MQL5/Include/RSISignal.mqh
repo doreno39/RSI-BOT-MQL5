@@ -21,38 +21,6 @@ struct RSISignalResult
   };
 
 //+------------------------------------------------------------------+
-//| CalcEMA                                                          |
-//| Tính EMA(period) tại vị trí idx trong mảng AS_SERIES            |
-//| index 0 = bar mới nhất, index totalBars-1 = bar cũ nhất         |
-//|                                                                  |
-//| Seed = SMA của period bars cũ nhất (index totalBars-period ..   |
-//|        totalBars-1), sau đó chạy EMA từ cũ về mới               |
-//| Trả về EMPTY_VALUE nếu không đủ dữ liệu                         |
-//+------------------------------------------------------------------+
-double CalcEMA(const double &src[], int period, int idx, int totalBars)
-  {
-   if(period <= 0 || totalBars < period || idx < 0 || idx >= totalBars)
-      return EMPTY_VALUE;
-
-   double alpha = 2.0 / (period + 1.0);
-
-   // Seed = SMA của period bars đầu tiên theo thời gian
-   // (index cao nhất trong AS_SERIES = bar cũ nhất)
-   int seedStart = totalBars - period; // index đầu tiên của seed window
-   double seed = 0.0;
-   for(int i = seedStart; i < totalBars; i++)
-      seed += src[i];
-   seed /= period;
-
-   // Chạy EMA từ bar cũ về bar mới (từ index cao xuống thấp)
-   double ema = seed;
-   for(int i = seedStart - 1; i >= idx; i--)
-      ema = alpha * src[i] + (1.0 - alpha) * ema;
-
-   return ema;
-  }
-
-//+------------------------------------------------------------------+
 //| CalcWMA                                                          |
 //| Tính WMA(period) tại vị trí idx trong mảng AS_SERIES            |
 //| Bar gần nhất (idx) nhận trọng số cao nhất (= period)            |
@@ -330,6 +298,113 @@ RSISignalResult CalcRSISignal(
 
    result.isSell = crossDown && curlingIn && prevUptrend
                    && hadUpExpand && ema9Down && distOK;
+
+   return result;
+  }
+
+//+------------------------------------------------------------------+
+//| CalcExpandArrays                                                 |
+//| Tính downExpandArr và upExpandArr cho toàn bộ bars              |
+//| O(N × fallingLen + N × expansionLen) — gọi một lần trước loop  |
+//+------------------------------------------------------------------+
+void CalcExpandArrays(
+   const double &rsiArr[],
+   const double &ema9Arr[],
+   const double &wma45Arr[],
+   bool         &downExpandArr[],   // output
+   bool         &upExpandArr[],     // output
+   int    totalBars,
+   int    fallingLen,
+   int    expansionLen)
+  {
+   ArrayResize(downExpandArr, totalBars);
+   ArrayResize(upExpandArr,   totalBars);
+
+   // Pre-compute diff arrays (O(N))
+   double diffDown[];
+   double diffUp[];
+   ArrayResize(diffDown, totalBars);
+   ArrayResize(diffUp,   totalBars);
+   for(int i = 0; i < totalBars; i++)
+     {
+      diffDown[i] = wma45Arr[i] - rsiArr[i];
+      diffUp[i]   = rsiArr[i]   - wma45Arr[i];
+     }
+
+   // Compute expand arrays (O(N × expansionLen))
+   for(int i = 0; i < totalBars; i++)
+     {
+      downExpandArr[i] = false;
+      upExpandArr[i]   = false;
+
+      bool dt = rsiArr[i] < ema9Arr[i] && ema9Arr[i] < wma45Arr[i];
+      bool ut = rsiArr[i] > ema9Arr[i] && ema9Arr[i] > wma45Arr[i];
+
+      if(dt)
+        {
+         bool fr = IsFalling(rsiArr,   i, fallingLen);
+         bool fe = IsFalling(ema9Arr,  i, fallingLen);
+         bool fw = IsFalling(wma45Arr, i, fallingLen);
+         double hDc = HighestN(diffDown, i,     expansionLen);
+         double hDp = HighestN(diffDown, i + 1, expansionLen);
+         bool ed = hDc != EMPTY_VALUE && hDp != EMPTY_VALUE && hDc > hDp;
+         downExpandArr[i] = fr && fe && fw && ed;
+        }
+
+      if(ut)
+        {
+         bool rr = IsRising(rsiArr,   i, fallingLen);
+         bool re = IsRising(ema9Arr,  i, fallingLen);
+         bool rw = IsRising(wma45Arr, i, fallingLen);
+         double hUc = HighestN(diffUp, i,     expansionLen);
+         double hUp = HighestN(diffUp, i + 1, expansionLen);
+         bool eu = hUc != EMPTY_VALUE && hUp != EMPTY_VALUE && hUc > hUp;
+         upExpandArr[i] = rr && re && rw && eu;
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| CalcRSISignalFast                                                |
+//| Phiên bản tối ưu: nhận pre-computed downExpandArr/upExpandArr   |
+//| Không tự build expand arrays → O(1) per bar thay vì O(lookback) |
+//+------------------------------------------------------------------+
+RSISignalResult CalcRSISignalFast(
+   const double &rsiArr[],
+   const double &ema9Arr[],
+   const double &wma45Arr[],
+   const bool   &downExpandArr[],
+   const bool   &upExpandArr[],
+   int    idx,
+   double distThreshold,
+   int    prevTrendLookback = 50)
+  {
+   RSISignalResult result;
+   result.rsi   = rsiArr[idx];
+   result.ema9  = ema9Arr[idx];
+   result.wma45 = wma45Arr[idx];
+   result.isBuy  = false;
+   result.isSell = false;
+
+   int arrSize = ArraySize(rsiArr);
+   if(idx + 1 >= arrSize)
+      return result;
+
+   // Buy Signal
+   bool crossUp   = rsiArr[idx] > ema9Arr[idx]   && rsiArr[idx+1] <= ema9Arr[idx+1];
+   bool curlingIn = MathAbs(wma45Arr[idx] - ema9Arr[idx]) < MathAbs(wma45Arr[idx+1] - ema9Arr[idx+1]);
+   bool prevDown  = rsiArr[idx+1] < ema9Arr[idx+1] && ema9Arr[idx+1] < wma45Arr[idx+1];
+   bool hadDownExp = FindPrevTrend(downExpandArr, idx, prevTrendLookback);
+   bool ema9Up    = ema9Arr[idx] >= ema9Arr[idx+1];
+   bool distOK    = MathAbs(wma45Arr[idx] - ema9Arr[idx]) <= distThreshold;
+   result.isBuy = crossUp && curlingIn && prevDown && hadDownExp && ema9Up && distOK;
+
+   // Sell Signal
+   bool crossDown  = rsiArr[idx] < ema9Arr[idx]   && rsiArr[idx+1] >= ema9Arr[idx+1];
+   bool prevUp     = rsiArr[idx+1] > ema9Arr[idx+1] && ema9Arr[idx+1] > wma45Arr[idx+1];
+   bool hadUpExp   = FindPrevTrend(upExpandArr, idx, prevTrendLookback);
+   bool ema9Down   = ema9Arr[idx] <= ema9Arr[idx+1];
+   result.isSell = crossDown && curlingIn && prevUp && hadUpExp && ema9Down && distOK;
 
    return result;
   }

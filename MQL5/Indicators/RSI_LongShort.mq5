@@ -86,6 +86,10 @@ double RSILowBuffer[];   // Buffer 6 — RSI vùng oversold (xanh lá)
 //--- RSI indicator handle
 int rsiHandle = INVALID_HANDLE;
 
+//--- Pre-computed expand arrays (persistent, rebuilt mỗi OnCalculate)
+bool downExpandArr[];
+bool upExpandArr[];
+
 //--- Alert state (tránh spam)
 int      last_alert_bar  = -1;
 
@@ -257,7 +261,14 @@ int OnCalculate(const int rates_total,
       wma45Arr[i] = CalcWMA(rsiRaw, WMA_Period, i);
 
    //------------------------------------------------------------------
-   // Bước 3: Tính tín hiệu và điền buffer
+   // Bước 3: Pre-compute expand arrays một lần duy nhất trước loop
+   //------------------------------------------------------------------
+   CalcExpandArrays(rsiRaw, ema9Arr, wma45Arr,
+                    downExpandArr, upExpandArr,
+                    rates_total, Falling_Length, Expansion_Length);
+
+   //------------------------------------------------------------------
+   // Bước 4: Tính tín hiệu và điền buffer
    //------------------------------------------------------------------
    // Lần đầu (prev_calculated == 0): tính toàn bộ history
    // Các lần sau: chỉ tính lại các bar mới + bar 1 (anti-repaint)
@@ -312,12 +323,11 @@ int OnCalculate(const int rates_total,
       else
          RSIMidBuffer[i] = rsiVal;
 
-      //--- Tính tín hiệu
-      RSISignalResult sig = CalcRSISignal(
+      //--- Tính tín hiệu (dùng pre-computed expand arrays)
+      RSISignalResult sig = CalcRSISignalFast(
                                rsiRaw, ema9Arr, wma45Arr,
+                               downExpandArr, upExpandArr,
                                i,
-                               Falling_Length,
-                               Expansion_Length,
                                Distance_Threshold,
                                PrevTrend_Lookback
                             );
@@ -342,11 +352,10 @@ int OnCalculate(const int rates_total,
       // Kiểm tra tín hiệu tại bar 1 (bar vừa đóng, không còn thay đổi)
       if(rates_total >= 2 && ema9Arr[1] != EMPTY_VALUE && wma45Arr[1] != EMPTY_VALUE)
         {
-         RSISignalResult sig1 = CalcRSISignal(
+         RSISignalResult sig1 = CalcRSISignalFast(
                                    rsiRaw, ema9Arr, wma45Arr,
+                                   downExpandArr, upExpandArr,
                                    1,
-                                   Falling_Length,
-                                   Expansion_Length,
                                    Distance_Threshold,
                                    PrevTrend_Lookback
                                 );
