@@ -212,6 +212,15 @@ int OnCalculate(const int rates_total,
                 const long &tick_volume[],
                 const int &spread[])
   {
+   //--- Re-ensure AS_SERIES cho indicator buffers (terminal có thể reset khi resize)
+   ArraySetAsSeries(RSIMidBuffer,  true);
+   ArraySetAsSeries(EMA9Buffer,    true);
+   ArraySetAsSeries(WMA45Buffer,   true);
+   ArraySetAsSeries(BuyBuffer,     true);
+   ArraySetAsSeries(SellBuffer,    true);
+   ArraySetAsSeries(RSIHighBuffer, true);
+   ArraySetAsSeries(RSILowBuffer,  true);
+
    //--- Cần ít nhất RSI_Period + WMA_Period bars
    int minBars = RSI_Period + WMA_Period + Falling_Length + Expansion_Length + 5;
    if(rates_total < minBars)
@@ -222,52 +231,48 @@ int OnCalculate(const int rates_total,
 
    //------------------------------------------------------------------
    // Bước 1: Copy RSI từ built-in handle
+   // CopyBuffer trả về số bars RSI thực sự copy được.
+   // RSI cần RSI_Period bars warmup nên rsiCopied thường < rates_total.
+   // Dùng rsiCopied làm effectiveBars cho toàn bộ tính toán.
    //------------------------------------------------------------------
    double rsiRaw[];
    ArraySetAsSeries(rsiRaw, true);
 
-   if(CopyBuffer(rsiHandle, 0, 0, rates_total, rsiRaw) < rates_total)
-     {
-      // Dữ liệu chưa sẵn sàng, thử lại tick tiếp theo
-      return prev_calculated;
-     }
+   int rsiCopied = CopyBuffer(rsiHandle, 0, 0, rates_total, rsiRaw);
+   if(rsiCopied <= 0)
+      return prev_calculated; // Dữ liệu chưa sẵn sàng, thử lại tick tiếp
+
+   int effectiveBars = rsiCopied; // Có thể < rates_total do warmup của RSI
 
    //------------------------------------------------------------------
    // Bước 2: Tính EMA9 và WMA45 của RSI
-   // Dùng mảng AS_SERIES (index 0 = bar mới nhất) nhất quán với rsiRaw
    //------------------------------------------------------------------
    double ema9Arr[];
    double wma45Arr[];
-   ArrayResize(ema9Arr,  rates_total);
-   ArrayResize(wma45Arr, rates_total);
-   // Đánh dấu AS_SERIES TRƯỚC khi ghi, để index nhất quán với rsiRaw
+   ArrayResize(ema9Arr,  effectiveBars);
+   ArrayResize(wma45Arr, effectiveBars);
    ArraySetAsSeries(ema9Arr,  true);
    ArraySetAsSeries(wma45Arr, true);
-
-   // Khởi tạo tất cả về EMPTY_VALUE
    ArrayInitialize(ema9Arr,  EMPTY_VALUE);
    ArrayInitialize(wma45Arr, EMPTY_VALUE);
 
-   // ---- Tính EMA9 một lần duy nhất (O(N)) ----
-   // Mảng AS_SERIES: index 0 = bar mới nhất, index rates_total-1 = bar cũ nhất
-   // Seed EMA bằng SMA của EMA_Period bars cũ nhất
-   int seedStart = rates_total - EMA_Period;
+   // ---- Tính EMA9 (O(N)) — seed từ SMA của EMA_Period bars cũ nhất ----
+   int seedStart = effectiveBars - EMA_Period;
    if(seedStart >= 0)
      {
       double emaSeed = 0.0;
-      for(int i = seedStart; i < rates_total; i++)
+      for(int i = seedStart; i < effectiveBars; i++)
          emaSeed += rsiRaw[i];
       emaSeed /= EMA_Period;
 
       double alphaEMA = 2.0 / (EMA_Period + 1.0);
-      ema9Arr[rates_total - EMA_Period] = emaSeed;
-      // Chạy EMA từ bar cũ về bar mới (index cao → thấp trong AS_SERIES)
-      for(int i = rates_total - EMA_Period - 1; i >= 0; i--)
+      ema9Arr[effectiveBars - EMA_Period] = emaSeed;
+      for(int i = effectiveBars - EMA_Period - 1; i >= 0; i--)
          ema9Arr[i] = alphaEMA * rsiRaw[i] + (1.0 - alphaEMA) * ema9Arr[i + 1];
      }
 
-   // ---- Tính WMA45 — O(N × period) với period cố định = O(N) ----
-   for(int i = 0; i < rates_total; i++)
+   // ---- Tính WMA45 ----
+   for(int i = 0; i < effectiveBars; i++)
       wma45Arr[i] = CalcWMA(rsiRaw, WMA_Period, i);
 
    //------------------------------------------------------------------
@@ -275,17 +280,14 @@ int OnCalculate(const int rates_total,
    //------------------------------------------------------------------
    CalcExpandArrays(rsiRaw, ema9Arr, wma45Arr,
                     downExpandArr, upExpandArr,
-                    rates_total, Falling_Length, Expansion_Length);
+                    effectiveBars, Falling_Length, Expansion_Length);
 
    //------------------------------------------------------------------
    // Bước 4: Tính tín hiệu và điền buffer
    //------------------------------------------------------------------
-   // Lần đầu (prev_calculated == 0): tính toàn bộ history
-   // Các lần sau: chỉ tính lại các bar mới + bar 1 (anti-repaint)
    int loopEnd;
    if(prev_calculated == 0)
      {
-      // Reset toàn bộ buffer
       ArrayInitialize(RSIMidBuffer,  EMPTY_VALUE);
       ArrayInitialize(EMA9Buffer,    EMPTY_VALUE);
       ArrayInitialize(WMA45Buffer,   EMPTY_VALUE);
@@ -293,20 +295,18 @@ int OnCalculate(const int rates_total,
       ArrayInitialize(SellBuffer,    EMPTY_VALUE);
       ArrayInitialize(RSIHighBuffer, EMPTY_VALUE);
       ArrayInitialize(RSILowBuffer,  EMPTY_VALUE);
-      loopEnd = rates_total;
+      loopEnd = effectiveBars;
      }
    else
      {
-      // Tính lại các bar mới thêm + bar 1 (bar 0 = forming, bar 1 = closed)
       int newBars = rates_total - prev_calculated;
-      loopEnd = newBars + 2; // +2: bar 0 (current) và bar 1 (vừa đóng)
-      if(loopEnd > rates_total)
-         loopEnd = rates_total;
+      loopEnd = newBars + 2;
+      if(loopEnd > effectiveBars)
+         loopEnd = effectiveBars;
      }
 
    for(int i = 0; i < loopEnd; i++)
      {
-      // Bỏ qua nếu không đủ dữ liệu EMA/WMA
       if(ema9Arr[i] == EMPTY_VALUE || wma45Arr[i] == EMPTY_VALUE)
          continue;
 
@@ -314,14 +314,9 @@ int OnCalculate(const int rates_total,
       double ema9Val = ema9Arr[i];
       double wmaVal  = wma45Arr[i];
 
-      //--- Điền EMA9 và WMA45 (index buffer theo AS_SERIES: 0=mới nhất)
-      // Buffer của indicator là non-series (index 0 = bar CŨ nhất trong array)
-      // Nhưng khi dùng SetIndexBuffer, MT5 tự quản lý — index i ở đây
-      // tương ứng với bar cách hiện tại i bars (0 = bar hiện tại)
-      EMA9Buffer[i]    = ema9Val;
-      WMA45Buffer[i]   = wmaVal;
+      EMA9Buffer[i]  = ema9Val;
+      WMA45Buffer[i] = wmaVal;
 
-      //--- Phân phối RSI vào 3 buffers theo ngưỡng
       RSIMidBuffer[i]  = EMPTY_VALUE;
       RSIHighBuffer[i] = EMPTY_VALUE;
       RSILowBuffer[i]  = EMPTY_VALUE;
@@ -333,7 +328,6 @@ int OnCalculate(const int rates_total,
       else
          RSIMidBuffer[i] = rsiVal;
 
-      //--- Tính tín hiệu (dùng pre-computed expand arrays)
       RSISignalResult sig = CalcRSISignalFast(
                                rsiRaw, ema9Arr, wma45Arr,
                                downExpandArr, upExpandArr,
@@ -342,25 +336,16 @@ int OnCalculate(const int rates_total,
                                PrevTrend_Lookback
                             );
 
-      //--- Điền arrow buffers
-      if(sig.isBuy)
-         BuyBuffer[i]  = rsiVal - 8.0;
-      else
-         BuyBuffer[i]  = EMPTY_VALUE;
-
-      if(sig.isSell)
-         SellBuffer[i] = rsiVal + 8.0;
-      else
-         SellBuffer[i] = EMPTY_VALUE;
+      BuyBuffer[i]  = sig.isBuy  ? rsiVal - 8.0 : EMPTY_VALUE;
+      SellBuffer[i] = sig.isSell ? rsiVal + 8.0 : EMPTY_VALUE;
      }
 
    //------------------------------------------------------------------
-   // Bước 4: Telegram alert — chỉ khi có bar mới
+   // Bước 5: Telegram alert — chỉ khi có bar mới
    //------------------------------------------------------------------
    if(rates_total > prev_calculated && last_alert_bar != rates_total)
      {
-      // Kiểm tra tín hiệu tại bar 1 (bar vừa đóng, không còn thay đổi)
-      if(rates_total >= 2 && ema9Arr[1] != EMPTY_VALUE && wma45Arr[1] != EMPTY_VALUE)
+      if(effectiveBars >= 2 && ema9Arr[1] != EMPTY_VALUE && wma45Arr[1] != EMPTY_VALUE)
         {
          RSISignalResult sig1 = CalcRSISignalFast(
                                    rsiRaw, ema9Arr, wma45Arr,
@@ -376,6 +361,8 @@ int OnCalculate(const int rates_total,
 
             if(EnableTelegram && TelegramBotToken != "" && TelegramChatId != "")
               {
+               ArraySetAsSeries(close, true);
+               ArraySetAsSeries(time,  true);
                string direction = sig1.isBuy ? "BUY" : "SELL";
                string emoji     = sig1.isBuy ? "📈" : "📉";
                string msg = emoji + " " + direction + " Signal\n"
