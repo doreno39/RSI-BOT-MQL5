@@ -69,6 +69,7 @@ input int    Expansion_Length   = 5;
 input double Distance_Threshold = 10.0;
 input double Overbought         = 80.0;
 input double Oversold           = 20.0;
+input int    PrevTrend_Lookback = 50;
 input string TelegramBotToken   = "";
 input string TelegramChatId     = "";
 input bool   EnableTelegram     = false;
@@ -87,7 +88,6 @@ int rsiHandle = INVALID_HANDLE;
 
 //--- Alert state (tránh spam)
 int      last_alert_bar  = -1;
-datetime last_alert_time = 0;
 
 //+------------------------------------------------------------------+
 //| Helper: chuyển ENUM_TIMEFRAMES thành chuỗi                      |
@@ -234,13 +234,27 @@ int OnCalculate(const int rates_total,
    ArrayInitialize(ema9Arr,  EMPTY_VALUE);
    ArrayInitialize(wma45Arr, EMPTY_VALUE);
 
-   // CalcEMA/CalcWMA nhận mảng AS_SERIES, trả về giá trị tại index i
-   // i=0 = bar hiện tại, i=rates_total-1 = bar cũ nhất
-   for(int i = 0; i < rates_total; i++)
+   // ---- Tính EMA9 một lần duy nhất (O(N)) ----
+   // Mảng AS_SERIES: index 0 = bar mới nhất, index rates_total-1 = bar cũ nhất
+   // Seed EMA bằng SMA của EMA_Period bars cũ nhất
+   int seedStart = rates_total - EMA_Period;
+   if(seedStart >= 0)
      {
-      ema9Arr[i]  = CalcEMA(rsiRaw, EMA_Period,  i, rates_total);
-      wma45Arr[i] = CalcWMA(rsiRaw, WMA_Period,  i);
+      double emaSeed = 0.0;
+      for(int i = seedStart; i < rates_total; i++)
+         emaSeed += rsiRaw[i];
+      emaSeed /= EMA_Period;
+
+      double alphaEMA = 2.0 / (EMA_Period + 1.0);
+      ema9Arr[rates_total - EMA_Period] = emaSeed;
+      // Chạy EMA từ bar cũ về bar mới (index cao → thấp trong AS_SERIES)
+      for(int i = rates_total - EMA_Period - 1; i >= 0; i--)
+         ema9Arr[i] = alphaEMA * rsiRaw[i] + (1.0 - alphaEMA) * ema9Arr[i + 1];
      }
+
+   // ---- Tính WMA45 — O(N × period) với period cố định = O(N) ----
+   for(int i = 0; i < rates_total; i++)
+      wma45Arr[i] = CalcWMA(rsiRaw, WMA_Period, i);
 
    //------------------------------------------------------------------
    // Bước 3: Tính tín hiệu và điền buffer
@@ -305,7 +319,7 @@ int OnCalculate(const int rates_total,
                                Falling_Length,
                                Expansion_Length,
                                Distance_Threshold,
-                               50
+                               PrevTrend_Lookback
                             );
 
       //--- Điền arrow buffers
@@ -325,34 +339,36 @@ int OnCalculate(const int rates_total,
    //------------------------------------------------------------------
    if(rates_total > prev_calculated && last_alert_bar != rates_total)
      {
-      // Tính tín hiệu tại bar 0 (bar hiện tại)
-      if(ema9Arr[0] != EMPTY_VALUE && wma45Arr[0] != EMPTY_VALUE)
+      // Kiểm tra tín hiệu tại bar 1 (bar vừa đóng, không còn thay đổi)
+      if(rates_total >= 2 && ema9Arr[1] != EMPTY_VALUE && wma45Arr[1] != EMPTY_VALUE)
         {
-         RSISignalResult sig0 = CalcRSISignal(
+         RSISignalResult sig1 = CalcRSISignal(
                                    rsiRaw, ema9Arr, wma45Arr,
-                                   0,
+                                   1,
                                    Falling_Length,
                                    Expansion_Length,
                                    Distance_Threshold,
-                                   50
+                                   PrevTrend_Lookback
                                 );
 
-         if(sig0.isBuy || sig0.isSell)
+         if(sig1.isBuy || sig1.isSell)
            {
             last_alert_bar = rates_total;
 
             if(EnableTelegram && TelegramBotToken != "" && TelegramChatId != "")
               {
-               string direction = sig0.isBuy ? "BUY" : "SELL";
-               string emoji     = sig0.isBuy ? "📈" : "📉";
+               string direction = sig1.isBuy ? "BUY" : "SELL";
+               string emoji     = sig1.isBuy ? "📈" : "📉";
                string msg = emoji + " " + direction + " Signal\n"
                           + "Symbol: " + Symbol() + " | TF: " + GetTFString(Period()) + "\n"
-                          + "RSI: "   + DoubleToString(sig0.rsi,  2)
-                          + " | EMA9: " + DoubleToString(sig0.ema9, 2)
-                          + " | WMA45: " + DoubleToString(sig0.wma45, 2) + "\n"
-                          + "Price: " + DoubleToString(close[0], _Digits) + "\n"
-                          + "Time: "  + TimeToString(time[0], TIME_DATE | TIME_MINUTES);
-               SendTelegramMessage(TelegramBotToken, TelegramChatId, msg);
+                          + "RSI: "   + DoubleToString(sig1.rsi,  2)
+                          + " | EMA9: " + DoubleToString(sig1.ema9, 2)
+                          + " | WMA45: " + DoubleToString(sig1.wma45, 2) + "\n"
+                          + "Price: " + DoubleToString(close[1], _Digits) + "\n"
+                          + "Time: "  + TimeToString(time[1], TIME_DATE | TIME_MINUTES);
+               bool sent = SendTelegramMessage(TelegramBotToken, TelegramChatId, msg);
+               if(!sent)
+                  Print("RSI_LongShort: Telegram alert failed. Check token, chat_id, and WebRequest whitelist.");
               }
            }
         }
