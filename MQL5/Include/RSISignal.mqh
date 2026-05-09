@@ -3,6 +3,9 @@
 //|                 RSI Long/Short Strategy Signal Library           |
 //|  Pure header — no OnInit/OnCalculate/global state               |
 //+------------------------------------------------------------------+
+#ifndef RSISIGNAL_MQH
+#define RSISIGNAL_MQH
+
 #property copyright "rsi-bot"
 
 //+------------------------------------------------------------------+
@@ -188,7 +191,8 @@ RSISignalResult CalcRSISignal(
    int    idx,
    int    fallingLen,
    int    expansionLen,
-   double distThreshold)
+   double distThreshold,
+   int    prevTrendLookback = 50)
   {
    RSISignalResult result;
    result.rsi   = rsiArr[idx];
@@ -206,7 +210,7 @@ RSISignalResult CalcRSISignal(
    // ---- Tính mảng diff tạm thời cho expansion check ----
    // Kích thước cần: trendArrLen + expansionLen + 1
    // (vì loop trendArr sẽ gọi HighestN tại i+1 với i tối đa = trendArrLen-1)
-   int lookback = 50;
+   int lookback = prevTrendLookback;
    int trendArrLen_pre = idx + lookback + 1;
    if(trendArrLen_pre > arrSize)
       trendArrLen_pre = arrSize;
@@ -373,3 +377,4 @@ bool SendTelegramMessage(string token, string chatId, string message)
    return (httpCode == 200);
   }
 //+------------------------------------------------------------------+
+#endif // RSISIGNAL_MQH
